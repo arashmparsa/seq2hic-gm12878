@@ -1,0 +1,8 @@
+inherit: smoke.yaml
+name: smoke_seq_only
+
+# Arm A counterpart of smoke.yaml, so the ablation + figure path is exercised
+# by the CPU smoke run too.
+inputs:
+  sequence: true
+  atac: false

@@ -1,0 +1,51 @@
+inherit: base.yaml
+name: smoke
+
+# Tiny end-to-end CPU run on synthetic data. Exercises every code path in the
+# real pipeline at 1/16 the window size so a broken tensor shape surfaces in
+# seconds rather than after a multi-hour download.
+synthetic: true
+
+paths:
+  proc: data/smoke      # never collide with the real materialised dataset
+
+window:
+  bp: 4096            # 2^12
+  n_bins: 32          # -> 128 bp per bin, 2^7 pooling stages
+  train_stride: 1024
+  eval_stride: 4096
+  max_n_frac: 0.25
+  min_cov_frac: 0.0
+
+inputs:
+  sequence: true
+  atac: true
+
+model:
+  trunk_channels: [16, 16, 16, 24, 24, 32, 32]   # 7 stages -> 2^7 = 128 bp bins
+  trunk_pools:    [ 2,  2,  2,  2,  2,  2,  2]
+  trunk_kernel: 5
+  stem_kernel: 11
+  dilated1d_blocks: 2
+  bottleneck_1d: 24
+  channels_2d: 16
+  dilated2d_blocks: 3
+  dilation_base: 2
+  dropout: 0.0
+  use_distance_channel: true
+
+train:
+  epochs: 2
+  batch_size: 2
+  grad_accum: 1
+  lr: 1.0e-3
+  weight_decay: 0.0
+  warmup_steps: 5
+  clip_grad_norm: 1.0
+  amp: false
+  num_workers: 0
+  early_stop_patience: 10
+  seed: 0
+  augment:
+    reverse_complement: true
+    shift_bp: 7

@@ -1,0 +1,107 @@
+# Shared settings. Arm configs inherit from this via `inherit: base.yaml`.
+
+paths:
+  root: .
+  raw: data/raw            # untouched ENCODE downloads
+  proc: data/processed     # memmaps, window index, cached targets
+  runs: runs
+
+genome:
+  assembly: GRCh38
+  fasta: data/raw/GRCh38.primary_assembly.genome.fa
+  tss: data/raw/gencode.tss.bed          # chrom start end gene_name strand
+  # Contigs used at all. Everything else (chrX/Y/M, scaffolds) is dropped.
+  chroms: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10,
+           chr11, chr12, chr13, chr14, chr15, chr16, chr17, chr18, chr19,
+           chr20, chr21, chr22]
+
+window:
+  bp: 2097152              # 2^21
+  n_bins: 256              # -> 8192 bp per bin
+  train_stride: 262144     # 2^18, ~8x oversampling of the training genome
+  eval_stride: 2097152     # non-overlapping
+  max_n_frac: 0.25         # drop windows with >25% N bases
+  min_cov_frac: 0.60       # drop windows where >40% of Hi-C bins are unmappable
+
+target:
+  source: data/raw/hic.mcool     # or .hic; prepare.py autodetects by suffix
+  balance: true                  # ICE (cooler) / KR (straw) weights
+  clip: 2.0                      # clip log(O/E) to +/- this
+  diagonal_offset: 2             # zero AND mask |i-j| < 2 (loss + metrics)
+  coarsegrain:
+    cutoff: 5.0                  # pool a pixel until its raw count reaches this
+    max_levels: 8                # pyramid depth; 8 => up to 256x256 native pooling
+  expected: train_only            # train_only | per_chrom
+  #   train_only  estimate the distance-decay curve on training chromosomes and
+  #               apply it everywhere. No test-chromosome statistics touch the
+  #               test targets.
+  #   per_chrom   each chromosome normalised by its own decay. Standard practice
+  #               and arguably not leakage, but it is a choice -- so it is opt-in.
+  # If the finest native resolution is coarser than 8192, targets are upsampled
+  # by area-resampling and `resample_warn` fires once.
+  prefer_resolution: 5000
+
+atac:
+  signal: data/raw/atac.fold_change.bigWig
+  peaks: data/raw/atac.idr_peaks.bed
+  transform: log1p
+  clip: 32.0
+  # bigWig reader: pybigwig | ucsc | npy
+  backend: auto
+  ucsc_bigwig_to_bedgraph: null   # path to bigWigToBedGraph.exe on Windows
+
+split:
+  # Two held-out test chromosomes: enough windows for a stable E-P AUPRC
+  # without giving up much training genome.
+  train: [chr1, chr2, chr3, chr4, chr6, chr7, chr8, chr11, chr12, chr13,
+          chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22]
+  val:   [chr5, chr14]
+  test:  [chr9, chr10]
+
+model:
+  # 13 stages, pools multiply to 8192 = window.bp / window.n_bins
+  trunk_channels: [32, 32, 48, 48, 64, 64, 96, 96, 128, 128, 160, 192, 224]
+  trunk_pools:    [ 2,  2,  2,  2,  2,  2,  2,  2,   2,   2,   2,   2,   2]
+  trunk_kernel: 5
+  stem_kernel: 11
+  dilated1d_blocks: 4
+  bottleneck_1d: 96          # C1 before outer concat
+  channels_2d: 48            # C2
+  # 8 blocks => receptive field 1 + 2*(1+2+...+128) = 511 bins = 4.19 Mb, which
+  # covers the 2.10 Mb window. At 6 blocks it is only 1.04 Mb and the corners of
+  # the map cannot see their own anchors -- verify with fig7_receptive_field.png
+  # after changing this.
+  dilated2d_blocks: 8
+  dilation_base: 2
+  dropout: 0.1
+  use_distance_channel: true
+
+train:
+  epochs: 40
+  batch_size: 1
+  grad_accum: 8
+  lr: 2.0e-4
+  weight_decay: 1.0e-6
+  warmup_steps: 500
+  clip_grad_norm: 1.0
+  amp: true
+  num_workers: 4
+  early_stop_patience: 6
+  seed: 1337
+  augment:
+    reverse_complement: true
+    shift_bp: 11             # random +/- jitter, must be < bin size
+
+eval:
+  insulation_window_bins: 10
+  boundary_prominence: 0.15
+  ep:
+    min_distance_bp: 20000
+    max_distance_bp: 2000000
+    tss_flank_bp: 1000
+    enhancer_tss_exclusion_bp: 2000
+    negatives_per_positive: 10
+    positives: contact_quantile   # contact_quantile | loops_bedpe
+    contact_quantile: 0.99
+    loops_bedpe: null
+  bootstrap: 1000

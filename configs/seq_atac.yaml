@@ -1,0 +1,7 @@
+inherit: base.yaml
+name: seq_atac
+
+# Arm B: DNA sequence + matched GM12878 accessibility as a fifth input channel.
+inputs:
+  sequence: true
+  atac: true

@@ -1,0 +1,9 @@
+inherit: base.yaml
+name: seq_only
+
+# Arm A: DNA sequence alone. ATAC is still loaded during evaluation because the
+# enhancer set for E-P scoring is defined from ATAC peaks -- but no accessibility
+# information reaches the model.
+inputs:
+  sequence: true
+  atac: false
