@@ -48,6 +48,17 @@ class MatrixSource(Protocol):
     def fetch(self, chrom: str, start: int, end: int) -> tuple[np.ndarray, np.ndarray, int]: ...
 
 
+def pick_resolution(avail: list[int], prefer: int) -> int:
+    """Coarsest available resolution that is still at least as fine as `prefer`.
+
+    (Not the finest: a .hic can include 1 bp or fragment-level matrices, and
+    fetching a 2 Mb window at 1 bp is a 2M x 2M matrix.) If nothing is that
+    fine, fall back to the finest available.
+    """
+    ok = [r for r in avail if r <= prefer]
+    return max(ok) if ok else min(avail)
+
+
 class CoolerSource:
     """cooler-backed reader (.cool / .mcool). Pure Python, works on Windows."""
 
@@ -59,7 +70,7 @@ class CoolerSource:
         uri = self.path
         if self.path.endswith(".mcool"):
             avail = sorted(int(r.split("/")[-1]) for r in cooler.fileops.list_coolers(self.path))
-            chosen = min((r for r in avail if r <= prefer_resolution), default=min(avail))
+            chosen = pick_resolution(avail, prefer_resolution)
             uri = f"{self.path}::resolutions/{chosen}"
             self.available_resolutions = avail
         self._clr = cooler.Cooler(uri)
@@ -95,7 +106,8 @@ class StrawSource:
         self._hic = hicstraw.HiCFile(self.path)
         avail = sorted(self._hic.getResolutions())
         self.available_resolutions = avail
-        self.binsize = min((r for r in avail if r <= prefer_resolution), default=min(avail))
+        self.binsize = pick_resolution(avail, prefer_resolution)
+        print(f"      .hic resolutions {avail} -> using {self.binsize} bp")
         self._norm = "KR" if balance else "NONE"
         self._sizes = {c.name: c.length for c in self._hic.getChromosomes() if c.name.lower() != "all"}
         self._prefixed = any(k.startswith("chr") for k in self._sizes)
