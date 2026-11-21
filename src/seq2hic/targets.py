@@ -108,9 +108,33 @@ class StrawSource:
         self.available_resolutions = avail
         self.binsize = pick_resolution(avail, prefer_resolution)
         print(f"      .hic resolutions {avail} -> using {self.binsize} bp")
-        self._norm = "KR" if balance else "NONE"
         self._sizes = {c.name: c.length for c in self._hic.getChromosomes() if c.name.lower() != "all"}
         self._prefixed = any(k.startswith("chr") for k in self._sizes)
+        self._zd: dict[tuple[str, str], object] = {}  # (chrom, norm) -> zoom data; one chrom at a time
+        self._norm = self._pick_norm() if balance else "NONE"
+        print(f"      balancing: {self._norm}")
+
+    # Newer Juicer .hic files often ship only VC/VC_SQRT at fine resolutions;
+    # asking for a missing vector makes hicstraw raise (std::bad_alloc).
+    NORM_PREFERENCE = ("KR", "SCALE", "VC_SQRT")
+
+    def _pick_norm(self) -> str:
+        probe = next(iter(self._sizes))
+        for norm in self.NORM_PREFERENCE:
+            try:
+                self._zoom(probe, norm)
+                return norm
+            except (MemoryError, RuntimeError, ValueError):
+                continue
+        raise RuntimeError(f"none of {self.NORM_PREFERENCE} present at {self.binsize} bp")
+
+    def _zoom(self, name: str, norm: str):
+        key = (name, norm)
+        if key not in self._zd:
+            if any(k[0] != name for k in self._zd):  # windows arrive sorted by chrom
+                self._zd = {k: v for k, v in self._zd.items() if k[0] == name}
+            self._zd[key] = self._hic.getMatrixZoomData(name, name, "observed", norm, "BP", self.binsize)
+        return self._zd[key]
 
     def chroms(self) -> dict[str, int]:
         if self._prefixed:
@@ -122,7 +146,7 @@ class StrawSource:
 
     def _matrix(self, chrom: str, s: int, e: int, norm: str) -> np.ndarray:
         name = self._name(chrom)
-        mzd = self._hic.getMatrixZoomData(name, name, "observed", norm, "BP", self.binsize)
+        mzd = self._zoom(name, norm)
         mat = np.asarray(mzd.getRecordsAsMatrix(s, e - 1, s, e - 1), dtype=np.float64)
         n = (e - s) // self.binsize
         if mat.shape != (n, n):  # straw trims trailing all-empty bins

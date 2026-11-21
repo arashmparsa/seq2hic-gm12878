@@ -25,7 +25,7 @@ window:
 
 target:
   source: data/raw/hic.mcool     # or .hic; prepare.py autodetects by suffix
-  balance: true                  # ICE (cooler) / KR (straw) weights
+  balance: true                  # ICE (cooler) / KR > SCALE > VC_SQRT (straw), first present
   clip: 2.0                      # clip log(O/E) to +/- this
   diagonal_offset: 2             # zero AND mask |i-j| < 2 (loss + metrics)
   coarsegrain:
