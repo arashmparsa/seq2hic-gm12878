@@ -15,14 +15,23 @@ pip install -q pyfaidx cooler
 export PYTHONPATH=src
 nvidia-smi --query-gpu=name,memory.total --format=csv | tee runs/gpu.txt
 BUDGET_H=${BUDGET_H:-11}
-start=$(date +%s)
+NGPU=$(nvidia-smi -L | wc -l)
+train_arm() {  # arm gpu
+  [ -f runs/$1/DONE ] && return 0
+  CUDA_VISIBLE_DEVICES=$2 python -m seq2hic.train --config configs/$1.yaml --resume     --max-hours "$BUDGET_H" > runs/$1.train.log 2>&1 || true
+}
+if [ "$NGPU" -ge 2 ]; then   # T4 x2: one arm per GPU, same schedule, run side by side
+  train_arm free_seq_only 0 & train_arm free_seq_atac 1 & wait
+else
+  start=$(date +%s)
+  for arm in free_seq_only free_seq_atac; do
+    left=$(python -c "import time; print(round($BUDGET_H - (time.time() - $start) / 3600, 2))")
+    python -c "import sys; sys.exit(0 if $left < 1.0 else 1)" && break
+    BUDGET_H=$left train_arm $arm 0
+  done
+fi
+tail -n 3 runs/*.train.log
 for arm in free_seq_only free_seq_atac; do
-  [ -f runs/$arm/DONE ] && continue
-  left=$(python -c "import time; print(round($BUDGET_H - (time.time() - $start) / 3600, 2))")
-  if python -c "import sys; sys.exit(0 if $left < 1.0 else 1)"; then
-    echo "session budget used up; run again next session"; exit 0
-  fi
-  python -m seq2hic.train --config configs/$arm.yaml --resume --max-hours "$left" 2>&1 | tee -a runs/$arm.train.log
   [ -f runs/$arm/DONE ] || { echo "$arm not finished; run again next session"; exit 0; }
 done
 for arm in free_seq_only free_seq_atac; do

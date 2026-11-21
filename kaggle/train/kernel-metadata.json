@@ -1,4 +1,4 @@
 {"id": "arashparsa97/seq2hic-train", "title": "seq2hic-train", "code_file": "run.py",
  "language": "python", "kernel_type": "script", "is_private": true,
- "enable_gpu": true, "enable_tpu": false, "enable_internet": true,
+ "enable_gpu": true, "machine_shape": "NvidiaTeslaT4", "enable_tpu": false, "enable_internet": true,
  "dataset_sources": [], "kernel_sources": ["arashparsa97/seq2hic-prepare"], "competition_sources": [], "model_sources": []}
