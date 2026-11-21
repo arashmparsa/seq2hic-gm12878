@@ -100,11 +100,21 @@ def _validate(cfg: Cfg) -> None:
             seen[c] = name
 
 
-def resolve(cfg: Cfg, key_path: str) -> Path:
-    """Resolve a path-valued config entry against paths.root."""
+def is_url(s: str) -> bool:
+    return str(s).startswith(("http://", "https://"))
+
+
+def resolve(cfg: Cfg, key_path: str) -> Path | str:
+    """Resolve a path-valued config entry against paths.root.
+
+    http(s) URLs are returned unchanged (as str): a remote .hic is read with
+    HTTP range requests, so the 95 GB file never has to be downloaded.
+    """
     node: Any = cfg
     for part in key_path.split("."):
         node = node[part]
+    if isinstance(node, str) and is_url(node):
+        return node
     root = Path(cfg["paths"]["root"]).resolve()
     p = Path(node)
     return p if p.is_absolute() else (root / p)

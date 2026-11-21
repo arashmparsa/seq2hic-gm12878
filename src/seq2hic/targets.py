@@ -133,6 +133,10 @@ class StrawSource:
 
 
 def open_matrix(path: str | Path, prefer_resolution: int = 5000, balance: bool = True) -> MatrixSource:
+    if str(path).startswith(("http://", "https://")):
+        if not str(path).endswith(".hic"):
+            raise ValueError("only remote .hic is supported (hicstraw reads it by HTTP range)")
+        return StrawSource(str(path), prefer_resolution, balance)
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{p} not found. Download it with `seq2hic.encode fetch`.")

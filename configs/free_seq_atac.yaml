@@ -11,3 +11,8 @@ train:
   epochs: 20
   early_stop_patience: 4
   num_workers: 2
+target:
+  # ENCFF916GWS (GM12878 Hi-C, ENCSR830NVY, md5 49db6d4b5b6a85bad3f42e935406b3b6),
+  # 95 GB. Read remotely by hicstraw with HTTP range requests -- only the blocks
+  # for the windows we use are fetched, so it never has to be downloaded.
+  source: https://encode-public.s3.amazonaws.com/2025/08/26/3dd4b360-327a-46cb-96b8-8abc57b9c89e/ENCFF916GWS.hic
