@@ -1,0 +1,13 @@
+inherit: seq_only.yaml
+name: free_seq_only
+
+# Free-GPU schedule (Kaggle T4/P100, 16 GB, ~30 GPU-h/week, 12 h sessions).
+# Identical to seq_only.yaml except a coarser training stride (4x instead of 8x
+# oversampling) and a shorter schedule, so each arm fits in ~1-2 sessions.
+# Both free_ arms share this schedule, so the delta stays interpretable.
+window:
+  train_stride: 524288     # 2^19
+train:
+  epochs: 20
+  early_stop_patience: 4
+  num_workers: 2

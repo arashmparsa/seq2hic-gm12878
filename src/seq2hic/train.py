@@ -75,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", required=True)
     ap.add_argument("--device", default=None)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument(
+        "--max-hours", type=float, default=None,
+        help="stop cleanly after the epoch that would push past this wall-clock budget "
+        "(for free GPU sessions with a hard time limit; rerun with --resume)",
+    )
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -113,15 +118,26 @@ def main(argv: list[str] | None = None) -> int:
     total_steps = steps_per_epoch * epochs
 
     start_epoch, best, bad_epochs, gstep = 0, float("inf"), 0, 0
+    history: list[dict] = []
     ckpt_path = out / "last.pt"
     if args.resume and ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device)
+        state = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(state["model"])
         opt.load_state_dict(state["optimizer"])
+        if "scaler" in state:
+            scaler.load_state_dict(state["scaler"])
         start_epoch, best, gstep = state["epoch"] + 1, state["best"], state["gstep"]
+        bad_epochs = int(state.get("bad_epochs", 0))
+        history = list(state.get("history", []))
+        if "torch_rng" in state:
+            torch.set_rng_state(state["torch_rng"].cpu())
         print(f"resumed from epoch {start_epoch}")
+        if bad_epochs >= int(tcfg["early_stop_patience"]):
+            print("  run had already early-stopped; nothing to do")
+            return 0
 
-    history = []
+    t_start = time.time()
+    out_of_time = False
     for epoch in range(start_epoch, epochs):
         model.train()
         t0 = time.time()
@@ -162,29 +178,46 @@ def main(argv: list[str] | None = None) -> int:
             f"val {row['val_loss']:.4f}  r={row['val_pearson']:.4f}  ({row['seconds']}s)"
         )
 
-        torch.save(
-            {
-                "model": model.state_dict(),
-                "optimizer": opt.state_dict(),
-                "epoch": epoch,
-                "best": best,
-                "gstep": gstep,
-                "config": dict(cfg),
-            },
-            ckpt_path,
-        )
-        if stats["val_loss"] < best:
+        improved = stats["val_loss"] < best
+        if improved:
             best, bad_epochs = stats["val_loss"], 0
             torch.save({"model": model.state_dict(), "config": dict(cfg), "epoch": epoch}, out / "best.pt")
         else:
             bad_epochs += 1
-            if bad_epochs >= int(tcfg["early_stop_patience"]):
-                print(f"  early stop: no val improvement for {bad_epochs} epochs")
-                break
 
+        # last.pt is written after best/bad_epochs are updated so a resume sees
+        # exactly the state the next epoch would have seen.
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "optimizer": opt.state_dict(),
+                "scaler": scaler.state_dict(),
+                "epoch": epoch,
+                "best": best,
+                "bad_epochs": bad_epochs,
+                "gstep": gstep,
+                "history": history,
+                "torch_rng": torch.get_rng_state(),
+                "config": dict(cfg),
+            },
+            ckpt_path,
+        )
         (out / "history.json").write_text(json.dumps(history, indent=1))
 
+        if bad_epochs >= int(tcfg["early_stop_patience"]):
+            print(f"  early stop: no val improvement for {bad_epochs} epochs")
+            break
+        if args.max_hours is not None:
+            elapsed = time.time() - t_start
+            per_epoch = elapsed / (epoch - start_epoch + 1)
+            if elapsed + per_epoch > args.max_hours * 3600:
+                print(f"  time budget: stopping after epoch {epoch+1}; rerun with --resume")
+                out_of_time = True
+                break
+
     (out / "history.json").write_text(json.dumps(history, indent=1))
+    if not out_of_time:
+        (out / "DONE").write_text("training finished\n")  # lets scripts skip a completed arm
     print(f"\nbest val loss {best:.4f} -> {out/'best.pt'}")
     return 0
 
