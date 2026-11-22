@@ -10,7 +10,12 @@ PREP=$(find /kaggle/input -maxdepth 6 -type d -path "*/data/processed" 2>/dev/nu
 PREP=${PREP%/processed}
 [ -n "$PREP" ] || { echo "prepare output not attached"; exit 1; }
 echo "prepare output: $PREP"
-ln -sfn "$PREP" data
+# processed/ stays on the read-only mount; raw/ (fasta + .fai) is copied to local disk
+# because pyfaidx rebuilds an index it thinks is stale and the mount is not writable.
+mkdir -p data/raw
+ln -sfn "$PREP/processed" data/processed
+cp -r "$PREP/raw/." data/raw/
+touch data/raw/*.fai
 mkdir -p /kaggle/working/runs
 PREV=$(find /kaggle/input -maxdepth 6 -type d -name runs 2>/dev/null | head -1 || true)
 [ -n "$PREV" ] && cp -rn "$PREV"/. /kaggle/working/runs/
