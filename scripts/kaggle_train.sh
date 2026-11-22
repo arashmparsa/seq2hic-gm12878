@@ -4,11 +4,15 @@
 # arms with --resume under a time budget, and evaluates once both are DONE.
 # Everything worth keeping lands in /kaggle/working/runs (this notebook's output).
 set -euo pipefail
-PREP=$(ls -d /kaggle/input/*/data 2>/dev/null | head -1)
+echo "attached inputs:"; find /kaggle/input -maxdepth 5 -type d 2>/dev/null | head -40 || true
+# kernel_sources mount depth differs between Kaggle images; find the data/ dir that holds processed/
+PREP=$(find /kaggle/input -maxdepth 6 -type d -path "*/data/processed" 2>/dev/null | head -1 || true)
+PREP=${PREP%/processed}
 [ -n "$PREP" ] || { echo "prepare output not attached"; exit 1; }
+echo "prepare output: $PREP"
 ln -sfn "$PREP" data
 mkdir -p /kaggle/working/runs
-PREV=$(ls -d /kaggle/input/*/runs 2>/dev/null | head -1 || true)
+PREV=$(find /kaggle/input -maxdepth 6 -type d -name runs 2>/dev/null | head -1 || true)
 [ -n "$PREV" ] && cp -rn "$PREV"/. /kaggle/working/runs/
 ln -sfn /kaggle/working/runs runs
 pip install -q pyfaidx cooler
