@@ -8,6 +8,7 @@ the sequence that the assembly gap does not support.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -26,18 +27,33 @@ class Genome:
     """Thin pyfaidx wrapper that returns uppercase byte sequences."""
 
     def __init__(self, fasta_path: str | Path):
-        from pyfaidx import Fasta
-
         self.path = Path(fasta_path)
         if not self.path.exists():
             raise FileNotFoundError(
                 f"{self.path} not found. Run `python -m seq2hic.encode genome`."
             )
-        self._fa = Fasta(str(self.path), as_raw=True, sequence_always_upper=True)
+        self._pid = None
+        self._handle = None
+        self.chrom_sizes = {name: len(rec) for name, rec in self._fa.records.items()}
 
     @property
-    def chrom_sizes(self) -> dict[str, int]:
-        return {name: len(rec) for name, rec in self._fa.records.items()}
+    def _fa(self):
+        # pyfaidx holds one open file handle. DataLoader workers are forked, so a
+        # handle opened in the parent is shared by every worker and they race on
+        # its seek offset -- reads come back the wrong length or, worse, the
+        # wrong bases. Reopen once per process.
+        if self._pid != os.getpid():
+            from pyfaidx import Fasta
+
+            self._handle = Fasta(str(self.path), as_raw=True, sequence_always_upper=True)
+            self._pid = os.getpid()
+        return self._handle
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_handle"] = None
+        state["_pid"] = None
+        return state
 
     def sequence(self, chrom: str, start: int, end: int) -> bytes:
         """Half-open [start, end). Out-of-bounds is N-padded rather than clipped,
@@ -49,16 +65,9 @@ class Genome:
         seq = s.encode("ascii") if isinstance(s, str) else bytes(s)
         if lpad or rpad:
             seq = b"N" * lpad + seq + b"N" * rpad
-        # pyfaidx has returned one base short for a few windows on Kaggle; a
-        # small shortfall is N-padded (all-zero one-hot) rather than crashing
-        # the run, anything larger is a real index/FASTA mismatch and raises.
         want = end - start
         if len(seq) != want:
-            gap = want - len(seq)
-            if not 0 < gap <= 16:
-                raise ValueError(f"{chrom}:{start}-{end} returned {len(seq)} bp, expected {want}")
-            print(f"warning: {chrom}:{start}-{end} returned {len(seq)} bp; N-padding {gap}", flush=True)
-            seq = seq + b"N" * gap
+            raise ValueError(f"{chrom}:{start}-{end} returned {len(seq)} bp, expected {want}")
         return seq
 
     def one_hot(self, chrom: str, start: int, end: int) -> np.ndarray:
