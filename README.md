@@ -253,10 +253,39 @@ meaningless without them:
 
 ## Status
 
-The pipeline runs end to end and is verified by 34 tests plus a synthetic CPU smoke run
-(`prepare → train both arms → evaluate → ablation → figures`). Design figures are
-committed. **No results on real ENCODE data are included yet** — that needs the download
-and a GPU; `figures/fig1`–`fig6` populate after training.
+The pipeline runs end to end and is verified by 36 tests plus a synthetic CPU smoke run
+(`prepare → train both arms → evaluate → ablation → figures`).
+
+### First real-data run (2026-11-22, Kaggle 2×T4, configs `free_seq_only` / `free_seq_atac`)
+
+Test chromosomes, 114 held-out 2 Mb windows; Δ = paired bootstrap, 1000 resamples.
+
+| metric | seq-only | seq+ATAC | Δ (95% CI) |
+|---|---|---|---|
+| map Pearson | 0.045 | 0.334 | +0.289 [0.249, 0.334] |
+| map Spearman | 0.047 | 0.304 | +0.257 [0.220, 0.297] |
+| insulation Pearson | −0.026 | 0.353 | +0.378 [0.313, 0.444] |
+| boundary F1 | 0.000 | 0.000 | — |
+| E–P loop AUPRC | 0.098 | 0.192 | +0.094 |
+| E–P loop AUROC | 0.521 | 0.723 | +0.203 |
+
+E–P reference points: random = 0.091 (positive rate), distance-only = 0.089 AUPRC / 0.499 AUROC.
+
+**Read with these caveats — this is not yet a fair ablation:**
+
+- **The seq-only arm did not train properly.** Validation loss blew up at epoch 3
+  (0.12 → 1.34 → 7.61) and early stopping ended it after 5 epochs; its best checkpoint
+  is from epoch 1 (val r = 0.07). The gap above therefore mixes "ATAC helps" with
+  "seq-only diverged". seq+ATAC trained stably for 17 epochs (best val r ≈ 0.35).
+  The seq-only arm needs a rerun with a lower learning rate / tighter clipping before
+  the Δ can be attributed to ATAC.
+- **Boundary F1 is 0 for both arms**, including one whose insulation tracks the truth
+  at r = 0.35 — most likely a boundary-calling / matching bug, not a model result.
+- The seq+ATAC arm beats the distance-only E–P baseline (AUPRC 0.19 vs 0.09), so it
+  has learned more than distance decay.
+- Earlier Kaggle attempts were discarded: forked DataLoader workers shared one pyfaidx
+  handle and could read wrong bases (fixed in `95cc1a6`). These numbers are from the
+  first run after that fix.
 
 ## License
 
