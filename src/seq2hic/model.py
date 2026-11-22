@@ -28,11 +28,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _norm(channels: int) -> nn.Module:
+    """GroupNorm, not BatchNorm. Training runs at batch_size 1 (a 2 Mb window per
+    step), where BatchNorm's running statistics are estimated from single samples
+    and drift: the first Kaggle run's seq-only arm trained fine in train mode while
+    its eval-mode val loss went 0.12 -> 1.34 -> 7.61. GroupNorm normalises within
+    each sample, so train and eval compute the same thing."""
+    return nn.GroupNorm(math.gcd(channels, 8), channels)
+
+
 class ConvBlock1d(nn.Module):
     def __init__(self, c_in: int, c_out: int, kernel: int, pool: int, dropout: float = 0.0):
         super().__init__()
         self.conv = nn.Conv1d(c_in, c_out, kernel, padding=kernel // 2, bias=False)
-        self.norm = nn.BatchNorm1d(c_out)
+        self.norm = _norm(c_out)
         # Non-power-of-2 pools are the norm here (10_000 = 2^4 * 5^4), so the
         # kernel and stride are set explicitly rather than left to default.
         self.pool = nn.MaxPool1d(kernel_size=pool, stride=pool) if pool > 1 else nn.Identity()
@@ -50,9 +59,9 @@ class DilatedResidual1d(nn.Module):
         mid = max(8, channels // 2)
         pad = dilation * (kernel - 1) // 2
         self.conv1 = nn.Conv1d(channels, mid, kernel, dilation=dilation, padding=pad, bias=False)
-        self.norm1 = nn.BatchNorm1d(mid)
+        self.norm1 = _norm(mid)
         self.conv2 = nn.Conv1d(mid, channels, 1, bias=False)
-        self.norm2 = nn.BatchNorm1d(channels)
+        self.norm2 = _norm(channels)
         self.drop = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -75,9 +84,9 @@ class DilatedResidual2d(nn.Module):
         mid = max(8, channels // 2)
         pad = dilation * (kernel - 1) // 2
         self.conv1 = nn.Conv2d(channels, mid, kernel, dilation=dilation, padding=pad, bias=False)
-        self.norm1 = nn.BatchNorm2d(mid)
+        self.norm1 = _norm(mid)
         self.conv2 = nn.Conv2d(mid, channels, 1, bias=False)
-        self.norm2 = nn.BatchNorm2d(channels)
+        self.norm2 = _norm(channels)
         self.drop = nn.Dropout2d(dropout) if dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -127,7 +136,7 @@ class Seq2HiC(nn.Module):
         stem_k = int(mcfg["stem_kernel"])
         self.stem = nn.Sequential(
             nn.Conv1d(in_channels, chans[0], stem_k, padding=stem_k // 2, bias=False),
-            nn.BatchNorm1d(chans[0]),
+            _norm(chans[0]),
             nn.GELU(),
         )
 
@@ -148,13 +157,13 @@ class Seq2HiC(nn.Module):
 
         c1 = int(mcfg["bottleneck_1d"])
         self.bottleneck = nn.Sequential(
-            nn.Conv1d(c_prev, c1, 1, bias=False), nn.BatchNorm1d(c1), nn.GELU()
+            nn.Conv1d(c_prev, c1, 1, bias=False), _norm(c1), nn.GELU()
         )
 
         c2 = int(mcfg["channels_2d"])
         c_pair = 2 * c1 + (1 if self.use_distance else 0)
         self.to2d = nn.Sequential(
-            nn.Conv2d(c_pair, c2, 1, bias=False), nn.BatchNorm2d(c2), nn.GELU()
+            nn.Conv2d(c_pair, c2, 1, bias=False), _norm(c2), nn.GELU()
         )
         base = int(mcfg.get("dilation_base", 2))
         self.dilation_base = base

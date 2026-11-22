@@ -22,6 +22,10 @@ PREV=$(find /kaggle/input -maxdepth 6 -type d -name runs 2>/dev/null | head -1 |
 ln -sfn /kaggle/working/runs runs
 pip install -q pyfaidx cooler
 export PYTHONPATH=src
+if [ "${PREFLIGHT:-0}" = "1" ]; then   # CPU session: check the data path end to end, no training
+  python scripts/preflight.py configs/free_seq_only.yaml configs/free_seq_atac.yaml 2>&1 | tee runs/preflight.log
+  exit "${PIPESTATUS[0]}"
+fi
 nvidia-smi --query-gpu=name,memory.total --format=csv | tee runs/gpu.txt
 BUDGET_H=${BUDGET_H:-11}
 NGPU=$(nvidia-smi -L | wc -l)
