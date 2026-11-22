@@ -94,7 +94,7 @@ train:
 
 eval:
   insulation_window_bins: 10
-  boundary_prominence: 0.15
+  boundary_prominence: 0.7   # in SDs of each window's z-scored insulation profile
   ep:
     min_distance_bp: 20000
     max_distance_bp: 2000000

@@ -93,9 +93,25 @@ def insulation_correlation(
     return out
 
 
-def call_boundaries(insulation: np.ndarray, prominence: float = 0.15) -> np.ndarray:
+def call_boundaries(insulation: np.ndarray, prominence: float = 0.7) -> np.ndarray:
     """Local minima of the insulation profile deeper than `prominence` below the
-    mean of their neighbourhood. Returns bin indices."""
+    mean of their neighbourhood. Returns bin indices.
+
+    The profile is z-scored first, so `prominence` is in standard deviations of
+    that window's own profile. An absolute threshold silently fails on model
+    output: MSE-trained predictions are shrunk toward the mean (on GM12878 test
+    windows the predicted insulation SD was ~0.07 vs ~0.22 observed), so a cut
+    tuned to observed maps called zero boundaries on every prediction and
+    boundary F1 read 0 for a model whose insulation tracks the truth at r~0.35.
+    0.7 SD reproduces the old 0.15 absolute cut on observed maps."""
+    insulation = np.asarray(insulation, dtype=np.float64)
+    fin = np.isfinite(insulation)
+    if fin.sum() < 3:
+        return np.asarray([], dtype=int)
+    sd = insulation[fin].std()
+    if sd < 1e-12:
+        return np.asarray([], dtype=int)
+    insulation = (insulation - insulation[fin].mean()) / sd
     n = insulation.size
     out = []
     for i in range(1, n - 1):
@@ -113,7 +129,7 @@ def call_boundaries(insulation: np.ndarray, prominence: float = 0.15) -> np.ndar
 
 def boundary_f1(
     pred: np.ndarray, target: np.ndarray, mask: np.ndarray, window_bins: int = 10,
-    prominence: float = 0.15, tolerance: int = 1,
+    prominence: float = 0.7, tolerance: int = 1,
 ) -> dict[str, float]:
     """Boundary-calling agreement, matching within +/- `tolerance` bins.
 

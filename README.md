@@ -253,7 +253,7 @@ meaningless without them:
 
 ## Status
 
-The pipeline runs end to end and is verified by 36 tests plus a synthetic CPU smoke run
+The pipeline runs end to end and is verified by 37 tests plus a synthetic CPU smoke run
 (`prepare → train both arms → evaluate → ablation → figures`).
 
 ### First real-data run (2026-11-22, Kaggle 2×T4, configs `free_seq_only` / `free_seq_atac`)
@@ -265,7 +265,7 @@ Test chromosomes, 114 held-out 2 Mb windows; Δ = paired bootstrap, 1000 resampl
 | map Pearson | 0.045 | 0.334 | +0.289 [0.249, 0.334] |
 | map Spearman | 0.047 | 0.304 | +0.257 [0.220, 0.297] |
 | insulation Pearson | −0.026 | 0.353 | +0.378 [0.313, 0.444] |
-| boundary F1 | 0.000 | 0.000 | — |
+| boundary F1 † | 0.000 | 0.157 (P 0.35 / R 0.10) | — |
 | E–P loop AUPRC | 0.098 | 0.192 | +0.094 |
 | E–P loop AUROC | 0.521 | 0.723 | +0.203 |
 
@@ -279,8 +279,13 @@ E–P reference points: random = 0.091 (positive rate), distance-only = 0.089 AU
   "seq-only diverged". seq+ATAC trained stably for 17 epochs (best val r ≈ 0.35).
   The seq-only arm needs a rerun with a lower learning rate / tighter clipping before
   the Δ can be attributed to ATAC.
-- **Boundary F1 is 0 for both arms**, including one whose insulation tracks the truth
-  at r = 0.35 — most likely a boundary-calling / matching bug, not a model result.
+- † **Boundary F1 was recomputed** from the saved test predictions after a metric fix:
+  boundaries were called with an absolute prominence cut (0.15), but MSE-trained
+  predictions are shrunk toward the mean (predicted insulation SD ≈ 0.07 vs 0.22
+  observed), so no boundaries were ever called on predictions and F1 read 0 for both
+  arms. Boundaries are now called on each window's z-scored insulation profile
+  (0.7 SD, which reproduces the old cut on observed maps: 197 vs 219 true boundaries).
+  The model is conservative — precise-ish but misses most boundaries.
 - The seq+ATAC arm beats the distance-only E–P baseline (AUPRC 0.19 vs 0.09), so it
   has learned more than distance decay.
 - Earlier Kaggle attempts were discarded: forked DataLoader workers shared one pyfaidx
