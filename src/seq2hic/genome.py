@@ -49,6 +49,16 @@ class Genome:
         seq = s.encode("ascii") if isinstance(s, str) else bytes(s)
         if lpad or rpad:
             seq = b"N" * lpad + seq + b"N" * rpad
+        # pyfaidx has returned one base short for a few windows on Kaggle; a
+        # small shortfall is N-padded (all-zero one-hot) rather than crashing
+        # the run, anything larger is a real index/FASTA mismatch and raises.
+        want = end - start
+        if len(seq) != want:
+            gap = want - len(seq)
+            if not 0 < gap <= 16:
+                raise ValueError(f"{chrom}:{start}-{end} returned {len(seq)} bp, expected {want}")
+            print(f"warning: {chrom}:{start}-{end} returned {len(seq)} bp; N-padding {gap}", flush=True)
+            seq = seq + b"N" * gap
         return seq
 
     def one_hot(self, chrom: str, start: int, end: int) -> np.ndarray:
