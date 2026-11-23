@@ -109,11 +109,33 @@ def fig_insulation(pred, targ, mask, chrom, start, bin_bp, out: Path, window_bin
     ip = M.insulation_score(pred[i], window_bins, mask[i].astype(bool))
     x = np.arange(io.size) * bin_bp / 1e6
 
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8, 4.6), height_ratios=[1, 1.3], sharex=True)
-    ax0.imshow(np.where(mask[i].astype(bool), targ[i], np.nan), cmap=CMAP, vmin=-VLIM, vmax=VLIM,
-               extent=[0, x[-1], x[-1], 0], interpolation="nearest", aspect="auto")
-    ax0.set_ylabel("Mb")
-    ax0.set_title(f"Observed map and insulation profile — {chrom[i]}:{start[i]/1e6:.1f} Mb")
+    # Rotated-triangle view: bin pair (a, b) sits at x = midpoint, y = separation, so the
+    # map shares the insulation track's x axis. Observed above zero, predicted mirrored below.
+    n = targ[i].shape[0]
+    scale = bin_bp / 1e6
+    depth = min(n, max(4 * window_bins, n // 4))          # show up to ~1/4 window of separation
+    edges = np.arange(n + 1)
+    A, B = np.meshgrid(edges, edges, indexing="ij")
+    X = (A + B) / 2 * scale
+    Y = (B - A) / 2 * scale
+    keep = mask[i].astype(bool)
+    upper = np.triu(np.ones((n, n), bool))
+    far = (np.arange(n)[None, :] - np.arange(n)[:, None]) > depth
+
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8, 5.4), height_ratios=[1.2, 1], sharex=True)
+    for arr, sign in ((targ[i], 1), (pred[i], -1)):
+        shown = np.ma.masked_where(~(keep & upper) | far, arr)
+        ax0.pcolormesh(X, sign * Y, shown, cmap=CMAP, vmin=-VLIM, vmax=VLIM, shading="flat",
+                       rasterized=True)
+    ymax = depth / 2 * scale
+    ax0.set_ylim(-ymax, ymax)
+    ax0.axhline(0, color="k", lw=0.6)
+    ax0.set_yticks([-ymax, 0, ymax], [f"{2*ymax:.2f}", "0", f"{2*ymax:.2f}"])
+    ax0.set_ylabel("separation (Mb)")
+    ax0.text(0.005, 0.97, "observed", transform=ax0.transAxes, va="top", fontsize=8)
+    ax0.text(0.005, 0.03, "predicted", transform=ax0.transAxes, va="bottom", fontsize=8)
+    ax0.set_title(f"Held-out map and insulation profile — {chrom[i]}:{start[i]/1e6:.1f} Mb "
+                  f"(median-r window)")
     ax0.grid(False)
 
     ax1.plot(x, io, lw=1.4, label="observed", color="#1f4e79")
