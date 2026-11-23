@@ -49,13 +49,28 @@ def _style() -> None:
     })
 
 
+MIN_VALID_FRAC = 0.5   # windows mostly masked (gaps, low coverage) give meaningless r
+
+
 def fig_contact_maps(pred, targ, mask, chrom, start, bin_bp, out: Path, note: str = "") -> None:
     corrs = np.asarray(M.map_correlation(pred, targ, mask), dtype=float)
-    ok = np.flatnonzero(np.isfinite(corrs))
+    n = mask.shape[-1]
+    band = np.abs(np.arange(n)[None, :] - np.arange(n)[:, None]) > 2
+    valid = (mask.astype(bool) & band).sum(axis=(1, 2)) / band.sum()
+    ok = np.flatnonzero(np.isfinite(corrs) & (valid >= MIN_VALID_FRAC))
     if ok.size == 0:
         return
     order = ok[np.argsort(corrs[ok])]
     picks = [("best", order[-1]), ("median", order[order.size // 2]), ("worst", order[0])]
+
+    # Predicted panels get their own symmetric scale: an MSE-trained model shrinks
+    # toward 0, and on the observed scale its structure is invisible. The scale is
+    # printed in the panel so nobody mistakes it for the observed magnitude.
+    sel = np.array([i for _, i in picks])
+    pv = np.abs(pred[sel][mask[sel].astype(bool)])
+    plim = float(np.percentile(pv, 99)) if pv.size else VLIM
+    collapsed = plim < 0.05
+    plim = max(plim, 0.05)
 
     fig, axes = plt.subplots(3, 3, figsize=(9.5, 9.6))
     for r, (label, i) in enumerate(picks):
@@ -66,14 +81,21 @@ def fig_contact_maps(pred, targ, mask, chrom, start, bin_bp, out: Path, note: st
         span_mb = (o.shape[0] * bin_bp) / 1e6
         ext = [0, span_mb, span_mb, 0]
 
-        for c, (arr, title) in enumerate(
-            ((o, "observed"), (p, "predicted"), (d, "predicted − observed"))
+        for c, (arr, title, lim) in enumerate(
+            ((o, "observed", VLIM), (p, f"predicted (own scale ±{plim:.2f})", plim),
+             (d, "predicted − observed", VLIM))
         ):
             ax = axes[r, c]
-            im = ax.imshow(arr, cmap=CMAP, vmin=-VLIM, vmax=VLIM, extent=ext,
-                           interpolation="nearest")
+            h = ax.imshow(arr, cmap=CMAP, vmin=-lim, vmax=lim, extent=ext,
+                          interpolation="nearest")
+            if c != 1:
+                im = h
             if r == 0:
                 ax.set_title(title)
+            if c == 1 and collapsed:
+                ax.text(0.5, 0.5, "prediction ≈ constant\n(model collapsed)",
+                        transform=ax.transAxes, ha="center", va="center",
+                        fontsize=9, color="#b3261e")
             if c == 0:
                 ax.set_ylabel(
                     f"{label}\n{chrom[i]}:{start[i]/1e6:.1f} Mb\nr = {corrs[i]:.3f}",
@@ -92,8 +114,10 @@ def fig_contact_maps(pred, targ, mask, chrom, start, bin_bp, out: Path, note: st
                 ax.set_xlabel("Mb")
 
     cbar = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.02)
-    cbar.set_label("log(observed / expected), clipped ±2")
-    fig.suptitle("Held-out contact maps: best / median / worst window" + note, y=0.98)
+    cbar.set_label("log(observed / expected), clipped ±2  (observed + difference panels)")
+    fig.suptitle("Held-out contact maps: best / median / worst window" + note
+                 + f"\n(ranked among {ok.size}/{len(corrs)} windows with ≥{MIN_VALID_FRAC:.0%} valid pixels)",
+                 y=0.99)
     fig.savefig(out)
     plt.close(fig)
 
@@ -170,7 +194,8 @@ def fig_training_curves(runs: list[Path], out: Path) -> None:
     if not any_data:
         plt.close(fig)
         return
-    ax0.set_xlabel("epoch"); ax0.set_ylabel("masked MSE"); ax0.set_title("loss")
+    ax0.set_yscale("log")   # one diverging run would otherwise flatten every other curve
+    ax0.set_xlabel("epoch"); ax0.set_ylabel("masked MSE (log scale)"); ax0.set_title("loss")
     ax0.legend(frameon=False, fontsize=7)
     ax1.set_xlabel("epoch"); ax1.set_ylabel("val map Pearson"); ax1.set_title("validation correlation")
     ax1.legend(frameon=False, fontsize=8)
@@ -243,16 +268,26 @@ def fig_ablation(ablation_json: Path, out: Path) -> None:
             ax.plot([r["ci_lo"], r["ci_lo"]], [i - 0.12, i + 0.12], color="black", lw=1.4)
             ax.plot([r["ci_hi"], r["ci_hi"]], [i - 0.12, i + 0.12], color="black", lw=1.4)
 
+    for i, r in enumerate(rows):
+        if r.get("ci_lo") is None or not np.isfinite(r["ci_lo"]):
+            labels[i] += "  †"
+        if isinstance(r.get("baseline"), (int, float)) and isinstance(r.get("treatment"), (int, float)):
+            labels[i] += f"\n{r['baseline']:.3f} → {r['treatment']:.3f}"
+
     ax.axvline(0, color="black", lw=1)
     ax.set_yticks(y); ax.set_yticklabels(labels)
     ax.invert_yaxis()
     ax.set_xlabel(f"Δ  ({data['treatment']} − {data['baseline']})")
-    ax.set_title("Effect of adding the ATAC channel\n(paired bootstrap, 95% CI)")
+    ax.set_title("Effect of adding the ATAC channel\n(per-window paired bootstrap, 95% CI)")
+    if any(r.get("ci_lo") is None for r in rows):
+        fig.text(0.01, -0.02, "† pooled over all test pairs/boundaries: single number, no CI",
+                 fontsize=7.5, color="#555555")
     fig.savefig(out)
     plt.close(fig)
 
 
-def fig_distance_decay(pred, targ, mask, bin_bp, out: Path, diagonal_offset: int = 2) -> None:
+def fig_distance_decay(pred, targ, mask, bin_bp, out: Path, diagonal_offset: int = 2,
+                       note: str = "") -> None:
     """Correlation as a function of genomic separation.
 
     This is the figure that catches the classic failure: strong overall
@@ -285,7 +320,7 @@ def fig_distance_decay(pred, targ, mask, bin_bp, out: Path, diagonal_offset: int
     ax.axhline(0, color="black", lw=0.8)
     ax.set_xlabel("genomic separation (Mb)")
     ax.set_ylabel("Pearson r")
-    ax.set_title("Prediction accuracy vs genomic distance")
+    ax.set_title("Prediction accuracy vs genomic distance" + note)
     ax.set_ylim(min(-0.05, min(corrs) - 0.05), max(1.0, max(corrs) + 0.05))
     fig.savefig(out)
     plt.close(fig)
@@ -317,7 +352,7 @@ def generate_for_run(
         p = figs_dir / f"{prefix}fig2_insulation.png"
         fig_insulation(pred, targ, mask, chrom, start, bin_bp, p); made.append(p)
         p = figs_dir / f"{prefix}fig6_distance_decay.png"
-        fig_distance_decay(pred, targ, mask, bin_bp, p); made.append(p)
+        fig_distance_decay(pred, targ, mask, bin_bp, p, note=n); made.append(p)
 
     if out_dir is None:
         p = figs_dir / "fig3_training_curves.png"
