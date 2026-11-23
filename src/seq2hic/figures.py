@@ -49,7 +49,50 @@ def _style() -> None:
     })
 
 
-MIN_VALID_FRAC = 0.5   # windows mostly masked (gaps, low coverage) give meaningless r
+MIN_VALID_FRAC = 0.5    # windows mostly masked (gaps, low coverage) give meaningless r
+COLLAPSE_RATIO = 0.05   # pred varies across windows < 5% as much as the data -> input ignored
+SMOOTH_SIGMA = 1.0      # display-only Gaussian (bins) on observed maps; raw 8 kb pixels are shot noise
+
+
+def _smooth(arr, valid, sigma=SMOOTH_SIGMA):
+    """NaN-aware Gaussian smoothing (normalised convolution) for display only."""
+    from scipy.ndimage import gaussian_filter
+    num = gaussian_filter(np.where(valid, arr, 0.0), sigma)
+    den = gaussian_filter(valid.astype(float), sigma)
+    # Isolated missing pixels are filled from their neighbours; larger holes stay blank.
+    return np.where(den > 0.3, num / np.maximum(den, 1e-9), np.nan)
+
+
+def _display_maps(pred_i, targ_i, mask_i):
+    """Smoothed observed + raw predicted, blanking only empty rows/cols and the masked band.
+    The prediction exists at sparse pixels too, so it is not punched full of holes."""
+    m = mask_i.astype(bool)
+    n = m.shape[0]
+    bad = m.mean(axis=1) < 0.1
+    near = np.abs(np.arange(n)[None, :] - np.arange(n)[:, None]) <= 1
+    drawable = ~(bad[:, None] | bad[None, :]) & ~near
+    obs = np.where(drawable, _smooth(targ_i, m), np.nan)
+    prd = np.where(drawable, pred_i, np.nan)
+    return obs, prd
+
+
+def collapse_ratio(pred, targ, mask) -> float:
+    """Mean across-window std of the prediction / same for the target. Near 0 means the
+    model emits the same map whatever the input."""
+    import warnings
+    m = mask.astype(bool)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sp = np.nanmean(np.nanstd(np.where(m, pred, np.nan), axis=0))
+        st = np.nanmean(np.nanstd(np.where(m, targ, np.nan), axis=0))
+    return float(sp / st) if st > 0 else float("nan")
+
+
+def _collapse_banner(ax, ratio):
+    ax.text(0.5, 0.5, "PREDICTION IGNORES INPUT\n(same map for every window;\n"
+            f"between-window spread {ratio:.1%} of data's)",
+            transform=ax.transAxes, ha="center", va="center", fontsize=8.5,
+            color="#b3261e", bbox=dict(fc="white", ec="#b3261e", alpha=0.9))
 
 
 def fig_contact_maps(pred, targ, mask, chrom, start, bin_bp, out: Path, note: str = "") -> None:
@@ -62,63 +105,47 @@ def fig_contact_maps(pred, targ, mask, chrom, start, bin_bp, out: Path, note: st
         return
     order = ok[np.argsort(corrs[ok])]
     picks = [("best", order[-1]), ("median", order[order.size // 2]), ("worst", order[0])]
+    ratio = collapse_ratio(pred, targ, mask)
+    collapsed = np.isfinite(ratio) and ratio < COLLAPSE_RATIO
 
-    # Predicted panels get their own symmetric scale: an MSE-trained model shrinks
-    # toward 0, and on the observed scale its structure is invisible. The scale is
-    # printed in the panel so nobody mistakes it for the observed magnitude.
-    sel = np.array([i for _, i in picks])
-    pv = np.abs(pred[sel][mask[sel].astype(bool)])
-    plim = float(np.percentile(pv, 99)) if pv.size else VLIM
-    collapsed = plim < 0.05
-    plim = max(plim, 0.05)
+    shown = [_display_maps(pred[i], targ[i], mask[i]) for _, i in picks]
+    olim = float(np.nanpercentile(np.abs(np.concatenate([o.ravel() for o, _ in shown])), 99))
+    plim = max(float(np.nanpercentile(np.abs(np.concatenate([p.ravel() for _, p in shown])), 99)), 1e-3)
+    span_mb = n * bin_bp / 1e6
+    up = np.triu(np.ones((n, n), bool), 1)
+    ext = [0, span_mb, span_mb, 0]
 
-    fig, axes = plt.subplots(3, 3, figsize=(9.5, 9.6))
-    for r, (label, i) in enumerate(picks):
-        m = mask[i].astype(bool)
-        o = np.where(m, targ[i], np.nan)
-        p = np.where(m, pred[i], np.nan)
-        d = np.where(m, pred[i] - targ[i], np.nan)
-        span_mb = (o.shape[0] * bin_bp) / 1e6
-        ext = [0, span_mb, span_mb, 0]
-
-        for c, (arr, title, lim) in enumerate(
-            ((o, "observed", VLIM), (p, f"predicted (own scale ±{plim:.2f})", plim),
-             (d, "predicted − observed", VLIM))
-        ):
-            ax = axes[r, c]
-            h = ax.imshow(arr, cmap=CMAP, vmin=-lim, vmax=lim, extent=ext,
-                          interpolation="nearest")
-            if c != 1:
-                im = h
-            if r == 0:
-                ax.set_title(title)
-            if c == 1 and collapsed:
-                ax.text(0.5, 0.5, "prediction ≈ constant\n(model collapsed)",
-                        transform=ax.transAxes, ha="center", va="center",
-                        fontsize=9, color="#b3261e")
-            if c == 0:
-                ax.set_ylabel(
-                    f"{label}\n{chrom[i]}:{start[i]/1e6:.1f} Mb\nr = {corrs[i]:.3f}",
-                    fontsize=8,
-                )
-            # Ticks are shared across the row and drawn only on the outer
-            # panels; three autoscaled axes per row collide at any window size.
-            ticks = [0, span_mb / 2, span_mb]
-            fmt = "%.2f" if span_mb < 1 else "%.1f"
-            ax.set_xticks(ticks)
-            ax.set_yticks(ticks)
-            ax.tick_params(labelsize=7)
-            ax.set_xticklabels([fmt % t for t in ticks] if r == 2 else [])
-            ax.set_yticklabels([fmt % t for t in ticks] if c == 0 else [])
-            if r == 2:
-                ax.set_xlabel("Mb")
-
-    cbar = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.02)
-    cbar.set_label("log(observed / expected), clipped ±2  (observed + difference panels)")
-    fig.suptitle("Held-out contact maps: best / median / worst window" + note
-                 + f"\n(ranked among {ok.size}/{len(corrs)} windows with ≥{MIN_VALID_FRAC:.0%} valid pixels)",
-                 y=0.99)
-    fig.savefig(out)
+    fig, axes = plt.subplots(1, 3, figsize=(12.5, 5.6))
+    fig.subplots_adjust(left=0.05, right=0.98, top=0.86, bottom=0.24, wspace=0.12)
+    for ax, (label, i), (obs, prd) in zip(axes, picks, shown):
+        h_o = ax.imshow(np.where(up, obs, np.nan), cmap=CMAP, vmin=-olim, vmax=olim,
+                        extent=ext, interpolation="nearest")
+        h_p = ax.imshow(np.where(up.T, prd, np.nan), cmap=CMAP, vmin=-plim, vmax=plim,
+                        extent=ext, interpolation="nearest")
+        ax.plot([0, span_mb], [0, span_mb], color="k", lw=0.6)
+        ax.text(0.97, 0.97, "observed", transform=ax.transAxes, ha="right", va="top", fontsize=8)
+        ax.text(0.03, 0.03, "predicted", transform=ax.transAxes, ha="left", va="bottom", fontsize=8)
+        ax.set_title(f"{label}: {chrom[i]}:{start[i]/1e6:.1f} Mb   r = {corrs[i]:.2f}", fontsize=9)
+        ticks = [0, span_mb / 2, span_mb]
+        ax.set_xticks(ticks, [f"{t:.1f}" for t in ticks])
+        ax.set_yticks(ticks, [f"{t:.1f}" for t in ticks])
+        ax.tick_params(labelsize=7)
+        ax.set_xlabel("Mb")
+        ax.grid(False)
+        if collapsed:
+            _collapse_banner(ax, ratio)
+    axes[0].set_ylabel("Mb")
+    # Two horizontal colour bars under the panels, side by side, so they never overlap.
+    for h, x0, lab in ((h_o, 0.12, f"observed log(O/E), smoothed σ={SMOOTH_SIGMA:g} bin"),
+                       (h_p, 0.56, "predicted log(O/E), own scale")):
+        cax = fig.add_axes([x0, 0.09, 0.32, 0.025])
+        cb = fig.colorbar(h, cax=cax, orientation="horizontal")
+        cb.set_label(lab, fontsize=8)
+        cb.ax.tick_params(labelsize=7)
+    fig.suptitle("Held-out windows: observed (upper-right) vs predicted (lower-left)" + note
+                 + f"\nbest / median / worst by map Pearson, among {ok.size}/{len(corrs)} windows "
+                 f"with ≥{MIN_VALID_FRAC:.0%} valid pixels", fontsize=10, y=0.985)
+    fig.savefig(out, bbox_inches=None)
     plt.close(fig)
 
 
@@ -128,39 +155,46 @@ def fig_insulation(pred, targ, mask, chrom, start, bin_bp, out: Path, window_bin
     if ok.size == 0:
         return
     i = ok[np.argsort(corrs[ok])][ok.size // 2]
+    ratio = collapse_ratio(pred, targ, mask)
 
     io = M.insulation_score(targ[i], window_bins, mask[i].astype(bool))
     ip = M.insulation_score(pred[i], window_bins, mask[i].astype(bool))
     x = np.arange(io.size) * bin_bp / 1e6
 
+    obs, prd = _display_maps(pred[i], targ[i], mask[i])
+    olim = float(np.nanpercentile(np.abs(obs), 99))
+    plim = max(float(np.nanpercentile(np.abs(prd), 99)), 1e-3)
+
     # Rotated-triangle view: bin pair (a, b) sits at x = midpoint, y = separation, so the
     # map shares the insulation track's x axis. Observed above zero, predicted mirrored below.
     n = targ[i].shape[0]
     scale = bin_bp / 1e6
-    depth = min(n, max(4 * window_bins, n // 4))          # show up to ~1/4 window of separation
+    depth = min(n, max(4 * window_bins, n // 4))
     edges = np.arange(n + 1)
     A, B = np.meshgrid(edges, edges, indexing="ij")
     X = (A + B) / 2 * scale
     Y = (B - A) / 2 * scale
-    keep = mask[i].astype(bool)
     upper = np.triu(np.ones((n, n), bool))
     far = (np.arange(n)[None, :] - np.arange(n)[:, None]) > depth
 
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8, 5.4), height_ratios=[1.2, 1], sharex=True)
-    for arr, sign in ((targ[i], 1), (pred[i], -1)):
-        shown = np.ma.masked_where(~(keep & upper) | far, arr)
-        ax0.pcolormesh(X, sign * Y, shown, cmap=CMAP, vmin=-VLIM, vmax=VLIM, shading="flat",
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8, 5.6), height_ratios=[1.2, 1], sharex=True)
+    for arr, sign, lim in ((obs, 1, olim), (prd, -1, plim)):
+        shown = np.ma.masked_invalid(np.where(upper & ~far, arr, np.nan))
+        ax0.pcolormesh(X, sign * Y, shown, cmap=CMAP, vmin=-lim, vmax=lim, shading="flat",
                        rasterized=True)
     ymax = depth / 2 * scale
     ax0.set_ylim(-ymax, ymax)
     ax0.axhline(0, color="k", lw=0.6)
     ax0.set_yticks([-ymax, 0, ymax], [f"{2*ymax:.2f}", "0", f"{2*ymax:.2f}"])
     ax0.set_ylabel("separation (Mb)")
-    ax0.text(0.005, 0.97, "observed", transform=ax0.transAxes, va="top", fontsize=8)
-    ax0.text(0.005, 0.03, "predicted", transform=ax0.transAxes, va="bottom", fontsize=8)
-    ax0.set_title(f"Held-out map and insulation profile — {chrom[i]}:{start[i]/1e6:.1f} Mb "
-                  f"(median-r window)")
+    ax0.text(0.005, 0.97, f"observed (smoothed, ±{olim:.2f})", transform=ax0.transAxes,
+             va="top", fontsize=8)
+    ax0.text(0.005, 0.03, f"predicted (own scale, ±{plim:.2f})", transform=ax0.transAxes,
+             va="bottom", fontsize=8)
+    ax0.set_title(f"Held-out map and insulation — {chrom[i]}:{start[i]/1e6:.1f} Mb (median window)")
     ax0.grid(False)
+    if np.isfinite(ratio) and ratio < COLLAPSE_RATIO:
+        _collapse_banner(ax0, ratio)
 
     ax1.plot(x, io, lw=1.4, label="observed", color="#1f4e79")
     ax1.plot(x, ip, lw=1.4, label="predicted", color="#c1440e")
@@ -169,7 +203,8 @@ def fig_insulation(pred, targ, mask, chrom, start, bin_bp, out: Path, window_bin
     ax1.set_xlabel("Mb")
     ax1.set_ylabel("insulation score")
     ax1.legend(frameon=False, fontsize=8)
-    ax1.set_title(f"insulation r = {corrs[i]:.3f}  (lower = stronger boundary)", fontsize=9)
+    ax1.set_title(f"insulation r = {corrs[i]:.2f}  (dips = boundaries; shaded lines = observed calls)",
+                  fontsize=9)
     fig.savefig(out)
     plt.close(fig)
 
