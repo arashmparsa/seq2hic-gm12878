@@ -1,0 +1,61 @@
+{
+ "baseline": "free_seq_only",
+ "treatment": "free_seq_atac",
+ "split": "test",
+ "rows": [
+  {
+   "metric": "map Pearson",
+   "baseline": 0.25983003971617374,
+   "treatment": 0.5606884092368891,
+   "delta": 0.30085836952071543,
+   "ci_lo": 0.26959651627897907,
+   "ci_hi": 0.3318444351090734,
+   "significant": true
+  },
+  {
+   "metric": "map Spearman",
+   "baseline": 0.26290271141471677,
+   "treatment": 0.5232739627353715,
+   "delta": 0.26037125132065464,
+   "ci_lo": 0.23145910274160963,
+   "ci_hi": 0.28994601352741783,
+   "significant": true
+  },
+  {
+   "metric": "insulation Pearson",
+   "baseline": 0.224655561433377,
+   "treatment": 0.6537723248937138,
+   "delta": 0.42911676346033706,
+   "ci_lo": 0.37844912921527624,
+   "ci_hi": 0.4747280857100538,
+   "significant": true
+  },
+  {
+   "metric": "boundary F1",
+   "baseline": 0.009615384615384614,
+   "treatment": 0.34782608695652173,
+   "delta": 0.3382107023411371,
+   "ci_lo": null,
+   "ci_hi": null,
+   "significant": null
+  },
+  {
+   "metric": "E-P loop AUPRC",
+   "baseline": 0.13783339011692852,
+   "treatment": 0.5474768322404295,
+   "delta": 0.409643442123501,
+   "ci_lo": null,
+   "ci_hi": null,
+   "significant": null
+  },
+  {
+   "metric": "E-P loop AUROC",
+   "baseline": 0.5845298810709534,
+   "treatment": 0.8973288947022208,
+   "delta": 0.3127990136312674,
+   "ci_lo": null,
+   "ci_hi": null,
+   "significant": null
+  }
+ ]
+}

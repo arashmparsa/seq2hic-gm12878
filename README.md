@@ -17,6 +17,13 @@ retrieval over held-out chromosomes.
 
 ![architecture](figures/fig0_architecture.png)
 
+**Result (held-out chr9 + chr10, 114 windows of 2 Mb):** adding the ATAC channel raises
+contact-map Pearson from **0.26 to 0.56** (Δ +0.30, 95% CI [0.27, 0.33]) and
+enhancer–promoter loop AUPRC from **0.14 to 0.55** (distance-only baseline 0.09).
+One training run per arm on free Kaggle GPUs; see [Results](#results) for caveats.
+
+![contact maps](figures/free_seq_atac_fig1_contact_maps.png)
+
 ---
 
 ## Data
@@ -200,20 +207,27 @@ python -m seq2hic.architecture_fig --config configs/seq_atac.yaml --out figures
 Panel 4 is the point of the whole transform: distance decay is gone, and what
 remains is the off-diagonal loop structure the model is actually asked to predict.
 
-**Result figures** — produced from a trained run:
+**Result figures** — produced from a trained run and committed to `figures/`
+(per-arm figures carry the arm name as a prefix):
 
 ```bash
-python -m seq2hic.figures --runs runs/seq_only runs/seq_atac --split test --bin-bp 8192
+python -m seq2hic.figures --runs runs/free_seq_only runs/free_seq_atac --split test --bin-bp 8192 --out figures
 ```
 
 | | |
 |---|---|
-| `fig1_contact_maps.png` | observed / predicted / difference for best, median and worst held-out windows |
-| `fig2_insulation.png` | observed vs predicted insulation profile with called boundaries |
-| `fig3_training_curves.png` | loss and validation correlation, both arms |
+| `<arm>_fig1_contact_maps.png` | one square per window, observed upper-right (smoothed σ = 1 bin for display), predicted lower-left on its own colour scale; best / median / worst held-out windows among those with ≥ 50% valid pixels |
+| `<arm>_fig2_insulation.png` | rotated observed/predicted maps above the insulation profiles, with observed boundary calls |
+| `fig3_training_curves.png` | loss (log scale) and validation correlation, both arms |
 | `fig4_ep_pr_curve.png` | E–P precision-recall vs the distance-only baseline |
-| `fig5_ablation.png` | per-metric Δ with paired bootstrap CIs |
-| `fig6_distance_decay.png` | accuracy as a function of genomic separation |
+| `fig5_ablation.png` | per-metric Δ with paired bootstrap CIs (pooled metrics marked †) |
+| `<arm>_fig6_distance_decay.png` | accuracy as a function of genomic separation |
+
+Predicted maps are drawn on their own scale because an MSE-trained model shrinks its
+output toward zero; on the observed scale its structure would be invisible. The scale
+is printed on the colour bar. The figure code also flags a model that emits the same
+map for every window (prediction spread across windows < 5% of the data's), which is
+how the broken seq-only arm of run v5 showed up.
 
 `fig6` is the honesty check: a high overall correlation carried entirely by
 short-range contacts, with long-range structure at chance, is the classic way
@@ -227,16 +241,7 @@ directory.
 
 ## Reporting
 
-`ablation.py` emits a markdown table and `ablation.json`:
-
-| metric | seq-only | seq+ATAC | Δ |
-|---|---|---|---|
-| map Pearson (test chroms) | | | |
-| map Spearman | | | |
-| insulation Pearson | | | |
-| boundary F1 | | | |
-| E–P loop AUPRC | | | |
-| E–P loop AUROC | | | |
+`ablation.py` emits a markdown table and `ablation.json` (filled-in numbers under [Results](#results)).
 
 Deltas use a **paired** bootstrap over windows — both arms are evaluated on the identical
 window list, so pairing cancels the shared between-window variance and gives a much
@@ -254,43 +259,72 @@ meaningless without them:
 ## Status
 
 The pipeline runs end to end and is verified by 37 tests plus a synthetic CPU smoke run
-(`prepare → train both arms → evaluate → ablation → figures`).
+(`prepare → train both arms → evaluate → ablation → figures`). A CPU preflight kernel
+pushes every train and validation window through the real loader before any GPU run.
 
-### First real-data run (2026-11-22, Kaggle 2×T4, configs `free_seq_only` / `free_seq_atac`)
+## Results
 
-Test chromosomes, 114 held-out 2 Mb windows; Δ = paired bootstrap, 1000 resamples.
+Run **v6** (2026-11-22, commit `eea9222`, Kaggle 2× T4, configs `free_seq_only` /
+`free_seq_atac`, both arms trained in parallel for the full 20 epochs, ~5.6 h).
+Test = chr9 + chr10, 114 held-out 2 Mb windows. Δ = paired bootstrap over windows,
+1000 resamples. Raw tables: [`results/v6/`](results/v6/).
 
 | metric | seq-only | seq+ATAC | Δ (95% CI) |
 |---|---|---|---|
-| map Pearson | 0.045 | 0.334 | +0.289 [0.249, 0.334] |
-| map Spearman | 0.047 | 0.304 | +0.257 [0.220, 0.297] |
-| insulation Pearson | −0.026 | 0.353 | +0.378 [0.313, 0.444] |
-| boundary F1 † | 0.000 | 0.157 (P 0.35 / R 0.10) | — |
-| E–P loop AUPRC | 0.098 | 0.192 | +0.094 |
-| E–P loop AUROC | 0.521 | 0.723 | +0.203 |
+| map Pearson | 0.260 | 0.561 | +0.301 [0.270, 0.332] |
+| map Spearman | 0.263 | 0.523 | +0.260 [0.232, 0.290] |
+| insulation Pearson | 0.225 | 0.654 | +0.429 [0.378, 0.475] |
+| boundary F1 † | 0.010 (P 0.09 / R 0.01) | 0.348 (P 0.45 / R 0.28) | +0.338 |
+| E–P loop AUPRC † | 0.138 | 0.547 | +0.410 |
+| E–P loop AUROC † | 0.585 | 0.897 | +0.313 |
 
-E–P reference points: random = 0.091 (positive rate), distance-only = 0.089 AUPRC / 0.499 AUROC.
+† pooled over all test boundaries / pairs: a single number, no interval.
+E–P: 16,918 distance-matched pairs, 1,538 positive. Reference points: random = 0.091
+(positive rate), distance-only = 0.089 AUPRC / 0.499 AUROC.
 
-**Read with these caveats — this is not yet a fair ablation:**
+![ablation](figures/fig5_ablation.png)
 
-- **The seq-only arm did not train properly.** Validation loss blew up at epoch 3
-  (0.12 → 1.34 → 7.61) and early stopping ended it after 5 epochs; its best checkpoint
-  is from epoch 1 (val r = 0.07). The gap above therefore mixes "ATAC helps" with
-  "seq-only diverged". seq+ATAC trained stably for 17 epochs (best val r ≈ 0.35).
-  The seq-only arm needs a rerun with a lower learning rate / tighter clipping before
-  the Δ can be attributed to ATAC.
-- † **Boundary F1 was recomputed** from the saved test predictions after a metric fix:
-  boundaries were called with an absolute prominence cut (0.15), but MSE-trained
-  predictions are shrunk toward the mean (predicted insulation SD ≈ 0.07 vs 0.22
-  observed), so no boundaries were ever called on predictions and F1 read 0 for both
-  arms. Boundaries are now called on each window's z-scored insulation profile
-  (0.7 SD, which reproduces the old cut on observed maps: 197 vs 219 true boundaries).
-  The model is conservative — precise-ish but misses most boundaries.
-- The seq+ATAC arm beats the distance-only E–P baseline (AUPRC 0.19 vs 0.09), so it
-  has learned more than distance decay.
-- Earlier Kaggle attempts were discarded: forked DataLoader workers shared one pyfaidx
-  handle and could read wrong bases (fixed in `95cc1a6`). These numbers are from the
-  first run after that fix.
+![E-P PR curve](figures/fig4_ep_pr_curve.png)
+
+![insulation](figures/free_seq_atac_fig2_insulation.png)
+
+**What this does and does not show**
+
+- Both arms learned. Sequence alone recovers real structure on unseen chromosomes
+  (map r = 0.26; E–P AUPRC 0.14 against a 0.09 distance baseline). Adding the matched
+  GM12878 ATAC track roughly doubles map accuracy, nearly triples insulation accuracy, and quadruples E–P
+  AUPRC. Every per-window CI excludes zero.
+- **One run per arm.** There is no seed-to-seed spread yet, so the Δ's CI reflects
+  window sampling only, not training variance.
+- **Both arms hit the 20-epoch cap** without early stopping. seq+ATAC had flattened
+  (val r 0.567 → 0.568 over the last four epochs); seq-only had too (0.278). Longer
+  training is unlikely to change the ordering but could shift the numbers.
+- **Not comparable to published numbers.** Akita and C.Origami use different window
+  sizes, resolutions, targets and far more compute. These numbers compare the two arms
+  here, under identical conditions, and nothing else.
+- **E–P labels come from the observed map** (the observed-map ceiling is AUPRC 1.0 by
+  construction), and enhancers are defined from ATAC peaks. The ATAC arm therefore sees
+  accessibility at exactly the anchors it is scored on. That is legitimate (it is the
+  question the ablation asks) but it is part of why the E–P gap is the largest.
+- Predicted maps show faint row/column streaks, most likely ATAC peaks propagated
+  directly into the map. They are visible in `fig1` and left in rather than smoothed
+  away.
+
+**Run history** (kept so the numbers above can be trusted for the right reasons)
+
+- **v4**: both arms crashed. Forked DataLoader workers shared one pyfaidx handle and
+  raced on its seek offset, producing wrong-length (and possibly wrong-base) reads.
+  Fixed in `95cc1a6` (FASTA reopened per process, strict length check).
+- **v5** (`bb2568d`): seq+ATAC map r 0.334, E–P AUPRC 0.192. The seq-only arm
+  **diverged** (val loss 0.12 → 1.34 → 7.61 at epochs 3–5) and output the same map for
+  every window, so that run's ablation was not fair. The cause was BatchNorm at batch
+  size 1: running statistics were corrupted and eval-mode outputs blew up. Replaced
+  with GroupNorm in `eea9222`. seq+ATAC also improved in v6 (0.33 → 0.56); v6 differs
+  from v5 in normalisation and in training the full 20 epochs, so the gain is not
+  attributed to either change alone.
+- Boundary F1 read 0 for both arms in v5 because boundaries were called with an
+  absolute prominence cut that shrunk MSE predictions never reached. Boundaries are
+  now called on each window's z-scored insulation profile (`68b88ec`).
 
 ## License
 
